@@ -66,7 +66,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 确保输出目录存在
+	// 确保输出目录干净
+	if _, err := os.Stat(finalDir); err == nil {
+		slog.Info("清理旧的输出目录", "func", funcName, "dir", finalDir)
+		if err := os.RemoveAll(finalDir); err != nil {
+			slog.Error("清理输出目录失败", "func", funcName, "err", err)
+			os.Exit(1)
+		}
+	}
+
 	if err := os.MkdirAll(finalDir, 0755); err != nil {
 		slog.Error("创建输出目录失败", "err", err)
 		os.Exit(1)
