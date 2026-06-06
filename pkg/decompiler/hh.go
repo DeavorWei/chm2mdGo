@@ -7,11 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
-// Extract 使用系统的 hh.exe 将 CHM 文件反编译到指定目录
-// 策略：为了避免 hh.exe 处理特殊字符（如 &、空格、中文）出错，
-// 我们先将源文件复制为临时目录下的 source.chm，处理完后再删除。
 func Extract(chmPath string, outputDir string) error {
 	funcName := "Extract"
 
@@ -42,23 +40,34 @@ func Extract(chmPath string, outputDir string) error {
 		}
 	}
 
-	if err := os.MkdirAll(absOutputDir, 0755); err != nil {
-		slog.Error("创建输出目录失败", "func", funcName, "dir", absOutputDir, "err", err)
-		return fmt.Errorf("创建目录失败: %w", err)
-	}
-
 	hhPath, err := exec.LookPath("hh.exe")
 	if err != nil {
 		slog.Error("未找到 hh.exe", "func", funcName, "err", err)
 		return fmt.Errorf("缺少 hh.exe: %w", err)
 	}
 
-	safeChmPath := filepath.Join(absOutputDir, "legacy_temp.chm")
+	parentDir := filepath.Dir(absOutputDir)
+	tempWorkDir := filepath.Join(parentDir, "temp_chm_extract_workdir")
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(tempWorkDir); os.IsNotExist(err) {
+			break
+		}
+		tempWorkDir = filepath.Join(parentDir, fmt.Sprintf("temp_chm_extract_workdir_%d", i))
+	}
 
-	slog.Info("正在创建安全副本以规避文件名问题", "func", funcName, "origin", absChmPath, "temp", safeChmPath)
+	if err := os.MkdirAll(tempWorkDir, 0755); err != nil {
+		slog.Error("创建临时工作目录失败", "func", funcName, "dir", tempWorkDir, "err", err)
+		return fmt.Errorf("创建临时工作目录失败: %w", err)
+	}
+	slog.Info("使用临时工作目录", "func", funcName, "temp_dir", tempWorkDir)
+
+	safeChmPath := filepath.Join(tempWorkDir, "legacy_temp.chm")
+
+	slog.Info("正在创建安全副本", "func", funcName, "origin", absChmPath, "temp", safeChmPath)
 
 	if err := copyFile(absChmPath, safeChmPath); err != nil {
 		slog.Error("创建副本失败", "func", funcName, "err", err)
+		_ = os.RemoveAll(tempWorkDir)
 		return fmt.Errorf("复制文件失败: %w", err)
 	}
 
@@ -69,7 +78,7 @@ func Extract(chmPath string, outputDir string) error {
 
 	slog.Info("开始调用 hh.exe 反编译", "func", funcName, "target", safeChmPath)
 
-	cmd := exec.Command(hhPath, "-decompile", absOutputDir, safeChmPath)
+	cmd := exec.Command(hhPath, "-decompile", tempWorkDir, safeChmPath)
 
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
@@ -80,7 +89,32 @@ func Extract(chmPath string, outputDir string) error {
 
 	if err != nil {
 		slog.Error("反编译命令执行异常", "func", funcName, "err", err, "output", outputStr)
+		_ = os.RemoveAll(tempWorkDir)
 		return fmt.Errorf("反编译失败: %w", err)
+	}
+
+	var hhcFound bool
+	filepath.Walk(tempWorkDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(path), ".hhc") {
+			hhcFound = true
+		}
+		return nil
+	})
+
+	if !hhcFound {
+		slog.Error("反编译后未找到HHC文件，可能解压失败", "func", funcName)
+		_ = os.RemoveAll(tempWorkDir)
+		return fmt.Errorf("反编译失败: 未生成有效文件")
+	}
+
+	slog.Info("重命名临时目录到目标目录", "func", funcName, "from", tempWorkDir, "to", absOutputDir)
+	if err := os.Rename(tempWorkDir, absOutputDir); err != nil {
+		slog.Error("重命名目录失败", "func", funcName, "err", err)
+		_ = os.RemoveAll(tempWorkDir)
+		return fmt.Errorf("重命名目录失败: %w", err)
 	}
 
 	if err := writeCacheMeta(chmPath, absOutputDir); err != nil {
