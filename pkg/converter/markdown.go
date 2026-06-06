@@ -40,12 +40,27 @@ func ConvertFile(htmlPath string) (string, error) {
 
 	// 2. 表格预处理 (处理 td 里的 p 标签，防止表格破裂)
 	doc.Find("td, th").Each(func(i int, s *goquery.Selection) {
+		// 处理 p 标签：替换为内容 + 换行符
 		s.Find("p").Each(func(j int, p *goquery.Selection) {
 			html, _ := p.Html()
-			p.ReplaceWithHtml(html + "<br>")
+			p.ReplaceWithHtml(html + "\n")
 		})
+
+		// 处理 br 标签：转换为换行符
+		s.Find("br").Each(func(j int, br *goquery.Selection) {
+			br.ReplaceWithHtml("\n")
+		})
+
+		// 清理 HTML 格式换行（仅清理 td/th 直接子节点的文本换行）
 		html, _ := s.Html()
-		s.SetHtml(strings.ReplaceAll(html, "\n", " "))
+		// 压缩多余空白，但保留有意添加的换行符
+		html = strings.ReplaceAll(html, "\r\n", "\n")
+		html = strings.ReplaceAll(html, "\r", "\n")
+		// 移除连续多余换行（超过2个换行压缩为2个）
+		for strings.Contains(html, "\n\n\n") {
+			html = strings.ReplaceAll(html, "\n\n\n", "\n\n")
+		}
+		s.SetHtml(html)
 	})
 
 	// 3. 处理超链接 <a> -> [纯文本]
