@@ -4,11 +4,11 @@ import (
 	"chm2md/pkg/decompiler"
 	"chm2md/pkg/merger"
 	"chm2md/pkg/parser"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"chm2md/pkg/converter"
@@ -17,19 +17,37 @@ import (
 func main() {
 	funcName := "main"
 
-	outDir := flag.String("o", "./output", "输出目录路径")
-	level := flag.Int("l", 0, "合并层级：0=不合并(默认)，1=按根目录合并，2=按二级目录合并...")
-	flag.Parse()
+	var chmFile string
+	var outDir string = "./output"
+	var level int = 0
 
-	args := flag.Args()
-	if len(args) == 0 {
+	args := os.Args[1:]
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		if arg == "-l" && i+1 < len(args) {
+			if val, err := strconv.Atoi(args[i+1]); err == nil {
+				level = val
+				i += 2
+				continue
+			}
+		} else if arg == "-o" && i+1 < len(args) {
+			outDir = args[i+1]
+			i += 2
+			continue
+		} else if !strings.HasPrefix(arg, "-") {
+			chmFile = arg
+		}
+		i++
+	}
+
+	if chmFile == "" {
 		slog.Error("请指定输入文件", "func", funcName)
 		os.Exit(1)
 	}
-	chmFile := args[0]
 
-	tempDir := filepath.Join(*outDir, "temp_source")
-	finalDir := filepath.Join(*outDir, "markdown")
+	tempDir := filepath.Join(outDir, "temp_source")
+	finalDir := filepath.Join(outDir, "markdown")
 
 	// 1. 反编译
 	if err := decompiler.Extract(chmFile, tempDir); err != nil {
@@ -81,10 +99,10 @@ func main() {
 	}
 
 	// 4. 根据模式执行转换
-	if *level > 0 {
+	if level > 0 {
 		// --- 合并模式 ---
-		slog.Info("进入合并模式", "func", funcName, "level", *level)
-		if err := merger.Process(roots, tempDir, finalDir, *level); err != nil {
+		slog.Info("进入合并模式", "func", funcName, "level", level)
+		if err := merger.Process(roots, tempDir, finalDir, level); err != nil {
 			slog.Error("合并生成失败", "func", funcName, "err", err)
 			os.Exit(1)
 		}
